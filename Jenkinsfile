@@ -18,6 +18,32 @@ pipeline {
             }
         }
 
+        stage('Set Environment') {
+            steps {
+                script {
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH?.replace('origin/', '')
+                    if (branch == 'main') {
+                        env.DEPLOY_TAG = 'prod'
+                        env.DEPLOY_ENV = 'production (prod APP VM)'
+                    } else if (branch == 'stage') {
+                        env.DEPLOY_TAG = 'staging'
+                        env.DEPLOY_ENV = 'staging (preprod APP VM)'
+                    } else {
+                        error("Only 'stage' and 'main' branches deploy. Current branch: ${branch}")
+                    }
+                }
+            }
+        }
+
+        stage('Approve Prod Deploy') {
+            when {
+                expression { env.DEPLOY_TAG == 'prod' }
+            }
+            steps {
+                input message: "Deploy ${FULL_IMAGE}:prod to PRODUCTION?", ok: 'Approve'
+            }
+        }
+
         stage('Build & Push') {
             steps {
                 script {
@@ -26,8 +52,8 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
                     sh '''
                         echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
-                        docker build -t ${FULL_IMAGE}:latest -t ${FULL_IMAGE}:${GIT_SHA} .
-                        docker push ${FULL_IMAGE}:latest
+                        docker build -t ${FULL_IMAGE}:${DEPLOY_TAG} -t ${FULL_IMAGE}:${GIT_SHA} .
+                        docker push ${FULL_IMAGE}:${DEPLOY_TAG}
                         docker push ${FULL_IMAGE}:${GIT_SHA}
                     '''
                 }
@@ -37,7 +63,7 @@ pipeline {
 
     post {
         success {
-            echo 'Image pushed. ArgoCD Image Updater will detect the new digest and sync to K3s.'
+            echo "Pushed ${FULL_IMAGE}:${DEPLOY_TAG}. Argo CD Image Updater on ${DEPLOY_ENV} will roll out the new digest."
         }
     }
 }
